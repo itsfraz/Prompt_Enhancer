@@ -21,3 +21,9 @@ export interface HistoryItem {
   styleName: string;
   result: EnhancementResult;
 }
+
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  content: string;
+}

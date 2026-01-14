@@ -1,10 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
-import { StyleDefinition, EnhancementResult, HistoryItem } from './types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { StyleDefinition, EnhancementResult, HistoryItem, PromptTemplate } from './types';
 import { enhancePrompt } from './services/geminiService';
 import StyleSelector from './components/StyleSelector';
 import ComparisonCard from './components/ComparisonCard';
 import CustomStyleModal from './components/CustomStyleModal';
+import TemplateSelector from './components/TemplateSelector';
+import TemplateModal from './components/TemplateModal';
 
 const PREDEFINED_STYLES: StyleDefinition[] = [
   { id: 'creative', name: 'Creative Writing', isCustom: false, instruction: 'Make it more descriptive and engaging. Focus on sensory details and character voice.' },
@@ -18,40 +20,48 @@ const PREDEFINED_STYLES: StyleDefinition[] = [
   { id: 'technical', name: 'Technical Docs', isCustom: false, instruction: 'Focus on precision, step-by-step clarity, and lack of ambiguity. Use consistent terminology.' }
 ];
 
+const DEFAULT_TEMPLATES: PromptTemplate[] = [
+  { 
+    id: 'feature_req', 
+    name: 'Feature Request', 
+    content: 'I want to add a feature for {{feature_name}}. It should allow users to {{capability}}. The key benefit is {{benefit}}.' 
+  },
+  { 
+    id: 'blog_post', 
+    name: 'Blog Post Draft', 
+    content: 'Write a blog post about {{topic}}. The target audience is {{audience}}. The tone should be {{tone}} and the main takeaway is {{key_takeaway}}.' 
+  }
+];
+
 const EXAMPLES: Record<string, string[]> = {
   'creative': ["A lonely clockmaker discovers a watch that can pause time.", "Write a short poem about the first snowfall.", "The secret life of a houseplant."],
   'agentic_ide': [
     "I need a Python script to scrape a website and save it to a database.",
     "Help me add user authentication to my Next.js app with Supabase.",
-    "Refactor this mess of a CSS file into clean Tailwind classes.",
-    "Create a Dockerfile for a Node.js backend with a Redis cache layer.",
-    "Fix the memory leak in this React useEffect hook."
+    "Refactor this mess of a CSS file into clean Tailwind classes."
   ],
   'vibe_coding': [
     "Refactor this legacy React class component into a functional one using modern Hooks and Tailwind CSS.",
-    "Build a responsive, glassmorphic landing page hero section with a floating 3D illustration.",
-    "Implement a robust JWT-based authentication flow with refresh tokens and secure cookie storage.",
-    "Create a reusable 'Command Palette' component with fuzzy search and keyboard shortcut support.",
-    "Optimize this recursive data transformation utility to handle 100k+ nested objects efficiently."
-  ],
-  'image_gen': ["A futuristic cyberpunk city in the style of Blade Runner.", "A portrait of a wise old wizard.", "An isometric 3D render of a tiny cozy forest cabin."],
-  'professional': ["Ask for a salary increase.", "Draft a professional rejection email.", "Explain a 2-day project delay."],
-  'academic': ["The implications of universal basic income.", "Summarize photosynthesis.", "Analyze isolated themes in literature."],
-  'chatbot': ["Explain black holes to 8-year-olds.", "Act as a travel guide for Mars.", "Troubleshoot a leaking faucet."],
-  'casual': ["Caption for a photo of me eating pizza.", "Invite friends to a BBQ.", "Funny way to tell roommates I'm moving."],
-  'technical': ["Configure secure SSH connection.", "Difference between REST and GraphQL.", "Setting up a React project with TS."]
+    "Build a responsive, glassmorphic landing page hero section."
+  ]
 };
 
 const App: React.FC = () => {
   const [input, setInput] = useState('');
   const [customStyles, setCustomStyles] = useState<StyleDefinition[]>([]);
+  const [templates, setTemplates] = useState<PromptTemplate[]>(DEFAULT_TEMPLATES);
+  const [selectedTemplate, setSelectedTemplate] = useState<PromptTemplate | null>(null);
+  const [templateValues, setTemplateValues] = useState<Record<string, string>>({});
+  
   const [selectedStyle, setSelectedStyle] = useState<StyleDefinition>(PREDEFINED_STYLES[0]);
   const [intensity, setIntensity] = useState(3);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<EnhancementResult | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  
+  const [isStyleModalOpen, setIsStyleModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -62,24 +72,38 @@ const App: React.FC = () => {
 
   const allStyles = [...PREDEFINED_STYLES, ...customStyles];
 
+  // Detect placeholders in the selected template
+  const placeholders = useMemo(() => {
+    if (!selectedTemplate) return [];
+    const matches = selectedTemplate.content.match(/{{(.*?)}}/g);
+    return matches ? Array.from(new Set(matches.map(m => m.replace(/{{|}}/g, '')))) : [];
+  }, [selectedTemplate]);
+
+  // Update input whenever template or placeholder values change
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    if (selectedTemplate) {
+      let newContent = selectedTemplate.content;
+      Object.entries(templateValues).forEach(([key, val]) => {
+        newContent = newContent.replaceAll(`{{${key}}}`, val || `[${key}]`);
+      });
+      setInput(newContent);
     }
+  }, [selectedTemplate, templateValues]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('theme', theme);
   }, [theme]);
 
   useEffect(() => {
     const savedHistory = localStorage.getItem('prompt_history');
-    if (savedHistory) {
-      try { setHistory(JSON.parse(savedHistory)); } catch (e) { console.error(e); }
-    }
+    if (savedHistory) try { setHistory(JSON.parse(savedHistory)); } catch (e) {}
+    
     const savedCustomStyles = localStorage.getItem('custom_styles');
-    if (savedCustomStyles) {
-      try { setCustomStyles(JSON.parse(savedCustomStyles)); } catch (e) { console.error(e); }
-    }
+    if (savedCustomStyles) try { setCustomStyles(JSON.parse(savedCustomStyles)); } catch (e) {}
+
+    const savedTemplates = localStorage.getItem('user_templates');
+    if (savedTemplates) try { setTemplates(JSON.parse(savedTemplates)); } catch (e) {}
   }, []);
 
   useEffect(() => {
@@ -89,6 +113,10 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('custom_styles', JSON.stringify(customStyles));
   }, [customStyles]);
+
+  useEffect(() => {
+    localStorage.setItem('user_templates', JSON.stringify(templates));
+  }, [templates]);
 
   const handleEnhance = async () => {
     if (!input.trim()) return;
@@ -120,38 +148,33 @@ const App: React.FC = () => {
 
   const handleDeleteCustomStyle = (id: string) => {
     setCustomStyles(prev => prev.filter(s => s.id !== id));
-    if (selectedStyle.id === id) {
-      setSelectedStyle(PREDEFINED_STYLES[0]);
-    }
+    if (selectedStyle.id === id) setSelectedStyle(PREDEFINED_STYLES[0]);
   };
 
-  const handleClearHistory = () => {
-    setHistory([]);
-    localStorage.removeItem('prompt_history');
-    setShowClearHistoryConfirm(false);
+  const handleSaveTemplate = (newTemplate: PromptTemplate) => {
+    setTemplates(prev => {
+      const existing = prev.find(t => t.id === newTemplate.id);
+      if (existing) return prev.map(t => t.id === newTemplate.id ? newTemplate : t);
+      return [...prev, newTemplate];
+    });
+    setSelectedTemplate(newTemplate);
+    setTemplateValues({});
   };
 
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light');
-  };
-
-  const getIntensityLabel = (val: number) => {
-    switch (val) {
-      case 1: return "Subtle";
-      case 2: return "Light";
-      case 3: return "Balanced";
-      case 4: return "High";
-      case 5: return "Extreme";
-      default: return "";
+  const handleDeleteTemplate = (id: string) => {
+    setTemplates(prev => prev.filter(t => t.id !== id));
+    if (selectedTemplate?.id === id) {
+      setSelectedTemplate(null);
+      setInput('');
     }
   };
 
   return (
     <div className="min-h-screen pb-20 transition-colors duration-300">
-      <nav className="border-b border-slate-200 dark:border-slate-800/50 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-50">
+      <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
@@ -162,19 +185,10 @@ const App: React.FC = () => {
           </div>
 
           <button
-            onClick={toggleTheme}
-            className="p-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-blue-500 transition-all shadow-sm"
-            aria-label="Toggle theme"
+            onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
+            className="p-2 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-blue-500 transition-all"
           >
-            {theme === 'light' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 9h-1m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.071 16.071l.707.707M7.757 7.757l.707.707M12 7a5 5 0 100 10 5 5 0 000-10z" />
-              </svg>
-            )}
+            {theme === 'light' ? '🌙' : '☀️'}
           </button>
         </div>
       </nav>
@@ -189,68 +203,75 @@ const App: React.FC = () => {
           </p>
         </section>
 
-        <div className="glass-morphism rounded-3xl p-6 md:p-8 mb-12 shadow-2xl relative overflow-hidden transition-all duration-300">
+        <div className="glass-morphism rounded-3xl p-6 md:p-8 mb-12 shadow-2xl relative overflow-hidden transition-all duration-300 border border-slate-200 dark:border-white/10">
           <div className="relative z-10">
-            <label className="block text-sm font-semibold text-slate-500 dark:text-slate-300 mb-4 uppercase tracking-widest">
-              Select Enhancement Target
-            </label>
-            <StyleSelector 
-              styles={allStyles} 
-              selectedId={selectedStyle.id} 
-              onSelect={setSelectedStyle}
-              onDelete={handleDeleteCustomStyle}
-              onAddNew={() => setIsModalOpen(true)}
-            />
-
-            {selectedStyle.id === 'creative' && (
-              <div className="mb-8 p-4 bg-slate-100/50 dark:bg-slate-900/40 rounded-2xl border border-slate-200 dark:border-slate-800/50 animate-in fade-in slide-in-from-top-2 duration-300">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
-                    Creative Intensity
-                    <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-md border border-blue-500/20 lowercase normal-case">
-                      {getIntensityLabel(intensity)}
-                    </span>
-                  </label>
-                  <span className="text-[10px] text-slate-500 font-mono">Level {intensity}/5</span>
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  step="1"
-                  value={intensity}
-                  onChange={(e) => setIntensity(parseInt(e.target.value))}
-                  className="w-full h-2 bg-slate-300 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+            <div className="flex flex-col gap-6 mb-8">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-3 uppercase tracking-widest">
+                  1. Enhancement Style
+                </label>
+                <StyleSelector 
+                  styles={allStyles} 
+                  selectedId={selectedStyle.id} 
+                  onSelect={setSelectedStyle}
+                  onDelete={handleDeleteCustomStyle}
+                  onAddNew={() => setIsStyleModalOpen(true)}
                 />
-                <div className="flex justify-between mt-2 px-1">
-                  <span className="text-[10px] text-slate-400 dark:text-slate-600 uppercase font-bold tracking-tighter">Factual</span>
-                  <span className="text-[10px] text-slate-400 dark:text-slate-600 uppercase font-bold tracking-tighter">Flourished</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-3 uppercase tracking-widest">
+                  2. Prompt Templates
+                </label>
+                <TemplateSelector 
+                  templates={templates}
+                  selectedId={selectedTemplate?.id || null}
+                  onSelect={(t) => { setSelectedTemplate(t); setTemplateValues({}); }}
+                  onDelete={handleDeleteTemplate}
+                  onAddNew={() => setIsTemplateModalOpen(true)}
+                />
+              </div>
+            </div>
+
+            {selectedTemplate && placeholders.length > 0 && (
+              <div className="mb-8 p-6 bg-blue-500/5 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-2xl animate-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-sm font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Template Variables
+                  </h4>
+                  <button onClick={() => { setSelectedTemplate(null); setInput(''); }} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">Clear Template</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {placeholders.map(ph => (
+                    <div key={ph}>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">{ph.replace(/_/g, ' ')}</label>
+                      <input 
+                        type="text" 
+                        value={templateValues[ph] || ''}
+                        onChange={(e) => setTemplateValues(prev => ({ ...prev, [ph]: e.target.value }))}
+                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
+                        placeholder={`Enter ${ph.replace(/_/g, ' ')}...`}
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
 
-            <div className="mb-6">
-              <label className="block text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">
-                Quick Start: Try an example
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {(EXAMPLES[selectedStyle.id] || EXAMPLES['creative']).map((ex, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setInput(ex)}
-                    className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 text-slate-600 dark:text-slate-400 hover:border-blue-500/50 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-500/5 transition-all truncate max-w-[200px]"
-                  >
-                    "{ex}"
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="relative group">
+              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-3 uppercase tracking-widest">
+                3. Final Prompt Content
+              </label>
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Enter your prompt, story fragment, or text to enhance..."
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  if (selectedTemplate) setSelectedTemplate(null); // Detach from template if user types directly
+                }}
+                placeholder="Enter your prompt or story fragment..."
                 className="w-full h-48 bg-white dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 rounded-2xl p-6 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all resize-none shadow-inner"
               />
               <div className="absolute bottom-4 right-4 text-xs text-slate-400 dark:text-slate-500">
@@ -276,7 +297,7 @@ const App: React.FC = () => {
                 ) : "Enhance Writing"}
               </button>
               <button
-                onClick={() => setInput('')}
+                onClick={() => { setInput(''); setSelectedTemplate(null); setTemplateValues({}); }}
                 className="px-6 py-4 rounded-xl font-semibold border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 Reset
@@ -338,37 +359,22 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {isModalOpen && (
-        <CustomStyleModal 
-          onClose={() => setIsModalOpen(false)} 
-          onSave={handleSaveCustomStyle} 
-        />
+      {isStyleModalOpen && (
+        <CustomStyleModal onClose={() => setIsStyleModalOpen(false)} onSave={handleSaveCustomStyle} />
+      )}
+      {isTemplateModalOpen && (
+        <TemplateModal onClose={() => setIsTemplateModalOpen(false)} onSave={handleSaveTemplate} />
       )}
 
       {showClearHistoryConfirm && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/60 dark:bg-slate-950/80 backdrop-blur-sm" onClick={() => setShowClearHistoryConfirm(false)} />
           <div className="bg-white dark:bg-slate-900 relative w-full max-w-sm p-8 rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 text-center border border-slate-200 dark:border-slate-800">
-            <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
             <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Clear History?</h3>
             <p className="text-slate-600 dark:text-slate-400 mb-8 text-sm">This action will permanently delete all your previous enhancement activities.</p>
             <div className="flex gap-3">
-              <button
-                onClick={() => setShowClearHistoryConfirm(false)}
-                className="flex-1 py-3 rounded-xl font-semibold border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleClearHistory}
-                className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
-              >
-                Clear All
-              </button>
+              <button onClick={() => setShowClearHistoryConfirm(false)} className="flex-1 py-3 rounded-xl font-semibold border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">Cancel</button>
+              <button onClick={() => { setHistory([]); setShowClearHistoryConfirm(false); }} className="flex-1 py-3 rounded-xl font-bold bg-red-500 text-white hover:bg-red-600 transition-all shadow-lg shadow-red-500/20">Clear All</button>
             </div>
           </div>
         </div>

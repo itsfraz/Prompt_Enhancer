@@ -2,14 +2,15 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { StyleDefinition, EnhancementResult } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-
 export const enhancePrompt = async (
   input: string, 
   style: StyleDefinition,
   intensity: number = 3
 ): Promise<EnhancementResult> => {
   try {
+    // Initialize GoogleGenAI right before the call to ensure the most up-to-date API key is used
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
     const intensityMap: Record<number, string> = {
       1: "Subtle & Conservative: Minimal changes, focused on basic grammar and slight clarity improvements.",
       2: "Modest: Light enhancements to vocabulary and flow without changing the core structure.",
@@ -18,8 +19,9 @@ export const enhancePrompt = async (
       5: "Maximum / Extreme: Full transformation. Highly evocative, incredibly detailed, and deeply immersive or technically dense."
     };
 
+    // Switched to gemini-3-pro-preview as prompt engineering and narrative enhancement are complex text tasks
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-3-pro-preview",
       contents: `Enhance the following text using the style/instruction provided.
       
       Target Style Name: ${style.name}
@@ -60,6 +62,7 @@ export const enhancePrompt = async (
       }
     });
 
+    // response.text is a getter, not a method.
     const result = JSON.parse(response.text);
     return result as EnhancementResult;
   } catch (error) {
